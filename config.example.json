@@ -1,0 +1,17 @@
+{
+  "botToken": "123456:PUT-YOUR-BOTFATHER-TOKEN-HERE",
+  "chatId": "000000000",
+
+  "minTurnSeconds": 15,
+  "requireTarget": true,
+
+  "openaiKey": "sk-... (optional, only for voice messages)",
+  "transcribeModel": "whisper-1",
+  "transcribeLang": "pt",
+
+  "wmuxCli": "C:/Users/you/wmux/app/resources/cli/wmux.js",
+  "projectRoots": [
+    { "dir": "C:/Users/you/Documents", "deep": true },
+    { "dir": "C:/Users/you/Desktop", "deep": false }
+  ]
+}

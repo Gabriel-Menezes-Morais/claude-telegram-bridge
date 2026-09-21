@@ -1,0 +1,111 @@
+# claude-telegram-bridge
+
+Controle seus terminais do **Claude Code** pelo Telegram — veja o que cada agente está
+fazendo, responda, e abra agentes novos, sem ficar na frente do notebook.
+
+O Remote Control nativo do Claude Code amarra o push à conta logada no app do celular.
+Quem usa várias contas acaba trocando de conta o dia inteiro. Esta ponte é agnóstica de
+conta: todo terminal da máquina, de qualquer conta, reporta para um único chat do Telegram,
+e cada resposta volta para um terminal específico.
+
+```
+  terminal ──hook Stop/Notification──▶ Telegram  ("✅ myapp · 84s  <o que o agente disse>")
+  terminal ◀──wmux send + Enter────── Telegram  ("myapp, roda os testes"  — texto ou áudio)
+```
+
+## O que faz
+
+- **Ida:** quando um turno termina (acima de `minTurnSeconds`) ou o agente para pedindo
+  permissão, a última mensagem dele chega no seu Telegram.
+- **Volta:** você responde do celular e o texto é digitado naquele terminal e enviado.
+- **Endereçamento:** toda mensagem carrega `[s:<id>]`. Responda a ela, ou comece com
+  `s:<id>`, `@pasta`, ou simplesmente o nome do terminal quando falar.
+- **Áudio:** mande um áudio. Ele é transcrito (Whisper), devolvido como `Ouvi: ...` para
+  você conferir, e roteado como qualquer mensagem.
+- **Nome falado tolerante a erro:** a transcrição troca "claude" por "Cláudio". O
+  roteamento usa distância de edição e acha o terminal mesmo assim.
+- **Abrir agentes:** `/novo myapp | roda os testes` abre um pane Claude naquela pasta,
+  responde o "trust this folder", espera a TUI subir e manda a tarefa.
+
+## Comandos do bot
+
+| Comando | Faz |
+| --- | --- |
+| `/panes` | lista os terminais vivos com os ids |
+| `/pastas [filtro]` | lista as pastas de projeto disponíveis |
+| `/novo <pasta> \| <tarefa>` | terminal Claude novo naquela pasta, já trabalhando |
+| `/nome s:<id> <apelido>` | dá ao terminal um nome fácil de falar |
+| `/matar s:<id>` | encerra aquele terminal |
+| `/ajuda` | a lista acima |
+
+Para endereçar um terminal, do melhor ao pior no celular:
+
+1. **Responda** (reply) uma notificação dele — o id viaja no texto citado.
+2. Prefixo: `s:eb2ac583 roda os testes` ou `@myapp roda os testes`.
+3. Fale o nome primeiro: *"myapp, roda os testes"* — o nome é cortado, a tarefa é enviada.
+
+Com `requireTarget: true`, mensagem sem destino é recusada em vez de chutada. Isso importa
+quando há três terminais rodando.
+
+## Requisitos
+
+- [Claude Code](https://claude.com/claude-code)
+- Node 18+ (recomendado 20+; a ponte usa `fetch` e `FormData` globais)
+- [wmux](https://github.com/wmux) — o multiplexador que é dono dos panes.
+  **A ida funciona sem ele**; a volta (digitar dentro de uma TUI rodando, abrir panes, ids
+  de pane) é construída sobre `wmux send`, `send-key`, `read-screen`, `agent spawn` e
+  `$WMUX_SURFACE_ID`.
+- Um bot do [@BotFather](https://t.me/BotFather) (grátis)
+- Opcional, para áudio: uma chave da OpenAI (~US$0,006 por minuto de áudio)
+
+## Instalação
+
+1. Copie os scripts:
+
+   ```bash
+   mkdir -p ~/.claude/hooks
+   cp src/notify.mjs  ~/.claude/hooks/telegram-notify.mjs
+   cp src/bridge.mjs  ~/.claude/hooks/bridge.mjs
+   cp src/setup.mjs   ~/.claude/hooks/telegram-setup.mjs
+   ```
+
+2. Crie o bot no `@BotFather`, mande qualquer mensagem para ele, e rode:
+
+   ```bash
+   node ~/.claude/hooks/telegram-setup.mjs <TOKEN_DO_BOT>
+   ```
+
+   Ele descobre o `chat_id` sozinho e escreve `~/.claude/telegram.json`.
+
+3. Registre os hooks em `~/.claude/settings.json` — três eventos, e **não** use `async` em
+   `Stop`/`Notification`: o processo encerra antes de a requisição terminar.
+
+4. Suba o daemon e ponha no boot (`Win+R` → `shell:startup`, copiando `install/bridge.vbs`):
+
+   ```bash
+   node ~/.claude/hooks/bridge.mjs
+   ```
+
+Veja `config.example.json` para todas as opções.
+
+## Segurança
+
+- Só mensagens do `chat_id` configurado são executadas; o resto é registrado e ignorado.
+- Uma mensagem do Telegram é **digitada num terminal com um agente de IA**. Trate o token
+  do bot como credencial de shell: quem o tiver dirige sua máquina.
+- O token fica em `~/.claude/telegram.json`, excluído pelo `.gitignore`. Se vazar, revogue
+  no `@BotFather` e rode o `setup.mjs` de novo.
+
+## Diagnóstico
+
+Dois logs, em `~/.claude`: `telegram-hook.log` (ida) e `telegram-bridge.log` (volta).
+
+Três armadilhas que custaram tempo:
+
+- **Node no Windows recusa `spawn` de `.cmd`** — chame `node wmux.js` direto, não o shim.
+- **`send-key` recebe a tecla primeiro:** `send-key enter --surface <id>`.
+- **Hook `Stop` com `async` é morto** antes de a requisição HTTP terminar.
+
+## Licença
+
+MIT — veja [LICENSE](LICENSE).
