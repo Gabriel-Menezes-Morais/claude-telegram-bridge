@@ -27,6 +27,9 @@ e cada resposta volta para um terminal específico.
   você conferir, e roteado como qualquer mensagem.
 - **Nome falado tolerante a erro:** a transcrição troca "claude" por "Cláudio". O
   roteamento usa distância de edição e acha o terminal mesmo assim.
+- **Avisa quando está morta:** o daemon segura uma trava na porta 49787 e toca um arquivo de
+  batimento. Toda notificação sonda essa porta, e mensagem enviada com o daemon caído chega
+  com um aviso — senão a ida continua funcionando e suas respostas somem sem sinal nenhum.
 - **Fila em vez de atropelo:** ordem mandada enquanto o pane está trabalhando (ou esperando
   permissão) fica guardada, não é digitada no meio do turno, e entra assim que o agente fica
   ocioso. O bot te avisa que enfileirou.
@@ -44,6 +47,7 @@ e cada resposta volta para um terminal específico.
 | `/parar s:<id>` | manda Esc — interrompe sem matar o terminal |
 | `/diff s:<id> [arquivo]` | o que o agente mudou de verdade, não o que ele diz que mudou |
 | `/tela s:<id>` | últimas 25 linhas do pane |
+| `/retomar s:<id>` | reabre um terminal fechado na mesma conversa |
 | `/panes` | lista os terminais vivos com os ids |
 | `/pastas [filtro]` | lista as pastas de projeto disponíveis |
 | `/novo <pasta> \| <tarefa>` | terminal Claude novo naquela pasta, já trabalhando |
@@ -121,6 +125,20 @@ Três armadilhas que custaram tempo:
 - **Node no Windows recusa `spawn` de `.cmd`** — chame `node wmux.js` direto, não o shim.
 - **`send-key` recebe a tecla primeiro:** `send-key enter --surface <id>`.
 - **Hook `Stop` com `async` é morto** antes de a requisição HTTP terminar.
+
+### Mantendo o daemon de pé
+
+A trava faz a segunda instância sair na hora, então um supervisor burro basta. No Windows,
+uma tarefa agendada a cada cinco minutos cobre boot e queda:
+
+```
+schtasks /Create /TN "ClaudeTelegramBridge" /SC MINUTE /MO 5 /F ^
+  /TR "wscript.exe \"%USERPROFILE%\.claude\hooks	elegram-bridge.vbs\""
+```
+
+O `/retomar` precisa de um id de sessão, que a ponte colhe do `wmux agent-state` a cada 30
+segundos enquanto o pane existe. Claude Code e OpenCode expõem um e são retomados
+exatamente; o Codex não, então ele cai na última sessão daquela pasta.
 
 ## Codex CLI
 

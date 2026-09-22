@@ -144,6 +144,7 @@ const HELP = [
   "/parar s:<id>  - manda Esc, interrompe sem matar",
   "/diff s:<id> [arquivo]  - o que o agente mudou de verdade",
   "/tela s:<id>  - ultimas 25 linhas do pane",
+  "/retomar s:<id>  - reabre a conversa de um terminal fechado",
   "",
   "Foto ou arquivo: mande respondendo a notificacao do terminal;",
   "a legenda vira a ordem e o caminho do arquivo vai junto.",
@@ -530,6 +531,34 @@ const handle = async (update) => {
 
   // Panes abertos na mao (inclusive Codex) nao se registram sozinhos ate
   // notificarem. /scan pega todos os que o wmux conhece.
+  if (/^\/retomar/.test(text)) {
+    const key0 = text.replace(/^\/retomar/, "").trim().replace(/^\[?s:/, "").replace(/\]$/, "");
+    const map = surfaces();
+    const key = key0 ? Object.keys(map).find((k) => k !== "__last" && k.startsWith(key0.toLowerCase())) : map.__last;
+    const hit = key && map[key];
+    if (!hit) { await reply("Use: /retomar s:<id>. /status lista os ids."); return; }
+    if (!hit.cwd) { await reply(`Nao sei a pasta de ${hit.label}; nao da para retomar.`); return; }
+
+    const agente = hit.agent || "claude";
+    // So o Codex nao expoe id de sessao para o wmux; nele o melhor disponivel
+    // e a ultima sessao daquela pasta.
+    const cmd = agente === "codex" ? "codex resume --last"
+      : agente === "opencode" ? (hit.sessionId ? `opencode --session ${hit.sessionId}` : "opencode --continue")
+      : (hit.sessionId ? `claude --resume ${hit.sessionId}` : "claude --continue");
+
+    const out = await wmux(["agent", "spawn", "--cmd", cmd, "--cwd", hit.cwd, "--label", hit.label]);
+    let ids;
+    try { ids = JSON.parse(out); } catch { await reply(`Nao consegui abrir o terminal em ${hit.cwd}.`); return; }
+
+    const novo = registerSurface(ids.surfaceId, hit.label, ids.agentId, agente);
+    const m2 = surfaces();
+    m2[novo] = { ...m2[novo], cwd: hit.cwd, alias: hit.alias, sessionId: hit.sessionId };
+    try { writeFileSync(SURFACES, JSON.stringify(m2, null, 2)); } catch {}
+    log(`retomado ${hit.label}: ${cmd}`);
+    await reply(`Retomando ${hit.label} com "${cmd}" [s:${novo}].${hit.sessionId ? "" : " Sem id de sessao guardado: abri a ultima daquela pasta."}`);
+    return;
+  }
+
   if (/^\/diff/.test(text)) {
     const arg = text.replace(/^\/diff/, "").trim();
     const mm = arg.match(/^\[?s:?([0-9a-f]{4,8})\]?\s*(.*)$/i);
@@ -666,6 +695,29 @@ await new Promise((ok) => {
 });
 
 try { mkdirSync(STATE, { recursive: true }); } catch {}
+
+// O wmux conhece o sessionId de cada pane vivo. Guardar enquanto ele existe e
+// o que torna possivel retomar depois que o terminal fechou.
+const varrerSessoes = async () => {
+  let states = [];
+  try { states = JSON.parse(await wmux(["agent-state"])).states || []; } catch { return; }
+  const map = surfaces();
+  let mudou = false;
+  for (const st of states) {
+    if (!st.sessionId) continue;
+    const key = Object.keys(map).find((k) => k !== "__last" && map[k].surface === st.surfaceId);
+    if (key && map[key].sessionId !== st.sessionId) { map[key].sessionId = st.sessionId; mudou = true; }
+  }
+  if (mudou) { try { writeFileSync(SURFACES, JSON.stringify(map, null, 2)); } catch {} }
+};
+
+const HEARTBEAT = `${HOME}/.claude/telegram-bridge.heartbeat`;
+const bater = () => { try { writeFileSync(HEARTBEAT, String(Date.now())); } catch {} };
+bater();
+setInterval(bater, 30000);
+setInterval(() => { varrerSessoes().catch(() => {}); }, 30000);
+varrerSessoes().catch(() => {});
+
 setInterval(() => { flushQueue().catch((e) => log(`flush erro: ${e?.message}`)); }, 3000);
 
 let offset = existsSync(OFFSET) ? Number(readFileSync(OFFSET, "utf8")) || 0 : 0;

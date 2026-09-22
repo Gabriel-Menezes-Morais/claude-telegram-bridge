@@ -4,6 +4,7 @@
 // Eventos conhecidos: agent-turn-complete.
 import { readFileSync, writeFileSync, appendFileSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
+import { connect } from "node:net";
 
 const HOME = homedir().split(String.fromCharCode(92)).join("/");
 const CONFIG = process.env.CLAUDE_TG_CONFIG || `${HOME}/.claude/telegram.json`;
@@ -49,7 +50,7 @@ try {
     throw last;
   };
 
-  const text = `🤖 codex · ${label}${asked ? `\n↳ ${asked}` : ""}\n\n${body}${surfaceMark(label, process.cwd())}`;
+  const text = `🤖 codex · ${label}${asked ? `\n↳ ${asked}` : ""}\n\n${body}${surfaceMark(label, process.cwd())}${await avisoPonte()}`;
   const r = await fetchRetry(`https://api.telegram.org/bot${cfg.botToken}/sendMessage`, {
     method: "POST",
     headers: { "content-type": "application/json" },

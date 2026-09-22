@@ -5,6 +5,7 @@
 import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync, rmSync } from "node:fs";
 import { join, basename } from "node:path";
 import { homedir } from "node:os";
+import { connect } from "node:net";
 
 
 const HOME = homedir().split(String.fromCharCode(92)).join("/");
@@ -35,13 +36,13 @@ const lastAssistantText = (path) => {
 };
 
 // Registra o pane wmux deste terminal e devolve o rodape que permite responder.
-const surfaceMark = (label, lastMsg, cwd) => {
+const surfaceMark = (label, lastMsg, cwd, sessionId) => {
   const full = process.env.WMUX_SURFACE_ID || "";
   if (!full) return "";
   const short = full.replace(/^surf-/, "").slice(0, 8);
   try {
     const map = existsSync(SURFACES) ? JSON.parse(readFileSync(SURFACES, "utf8")) : {};
-    map[short] = { ...(map[short] || {}), surface: full, label, agent: "claude", cwd: cwd || undefined, at: Date.now(), lastMsg: String(lastMsg || "").slice(0, 160) };
+    map[short] = { ...(map[short] || {}), surface: full, label, agent: "claude", cwd: cwd || undefined, sessionId: sessionId || undefined, at: Date.now(), lastMsg: String(lastMsg || "").slice(0, 160) };
     map.__last = short;
     writeFileSync(SURFACES, JSON.stringify(map, null, 2));
   } catch {}
@@ -58,6 +59,33 @@ const fetchRetry = async (url, opts, tries = 4) => {
     await new Promise((r) => setTimeout(r, 700 * (i + 1)));
   }
   throw last;
+};
+
+
+// A ponte viva mantem a trava na 49787. Sem ela, a notificacao ainda chega,
+// mas resposta sua nao volta — e voce so descobriria tentando.
+const pontePerto = () => new Promise((res) => {
+  const s = connect({ port: 49787, host: "127.0.0.1" });
+  const fim = (v) => { try { s.destroy(); } catch {} res(v); };
+  s.setTimeout(800);
+  s.once("connect", () => fim(true));
+  s.once("timeout", () => fim(false));
+  s.once("error", () => fim(false));
+});
+
+const avisoPonte = async () => {
+  if (await pontePerto()) return "";
+  let desde = "";
+  try {
+    const hb = `${HOME}/.claude/telegram-bridge.heartbeat`;
+    if (existsSync(hb)) {
+      const min = Math.round((Date.now() - Number(readFileSync(hb, "utf8"))) / 60000);
+      desde = min > 0 ? ` (ha ${min}min)` : "";
+    }
+  } catch {}
+  return `
+
+[!] Ponte offline${desde}: sua resposta NAO vai chegar. Rode: node "${HOME}/.claude/hooks/telegram-bridge.mjs"`;
 };
 
 const send = async (token, chatId, text, keyboard) => {
@@ -104,7 +132,7 @@ try {
       { text: "Sim, sempre", callback_data: `k:${short}:2` },
       { text: "Nao", callback_data: `k:${short}:esc` },
     ]] : null;
-    await send(cfg.botToken, cfg.chatId, `🔔 ${tag}\n${msg}${surfaceMark(label, msg, input.cwd)}`, keyboard);
+    await send(cfg.botToken, cfg.chatId, `🔔 ${tag}\n${msg}${surfaceMark(label, msg, input.cwd, input.session_id)}${await avisoPonte()}`, keyboard);
     process.exit(0);
   }
 
@@ -119,7 +147,7 @@ try {
     if (!fromPhone && elapsed < minTurn) { log(`pulou: ${Math.round(elapsed)}s < ${minTurn}s`); process.exit(0); }
     const body = lastAssistantText(input.transcript_path) || "(turno terminou sem texto)";
     const secs = Number.isFinite(elapsed) ? ` · ${Math.round(elapsed)}s` : "";
-    await send(cfg.botToken, cfg.chatId, `✅ ${tag}${secs}\n\n${body}${surfaceMark(label, body, input.cwd)}`);
+    await send(cfg.botToken, cfg.chatId, `✅ ${tag}${secs}\n\n${body}${surfaceMark(label, body, input.cwd, input.session_id)}${await avisoPonte()}`);
   }
 } catch (e) {
   log(`erro: ${e?.message}`);

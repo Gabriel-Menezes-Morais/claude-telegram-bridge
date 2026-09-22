@@ -30,6 +30,10 @@ chat, and every reply is routed back to a specific terminal.
   `Ouvi: ...` so you can check it, then routed like any other message.
 - **Fuzzy names:** speech-to-text mangles names ("claude" → "Cláudio"). Routing uses edit
   distance, so the terminal is still found.
+- **It tells you when it is dead:** the daemon holds a lock on port 49787 and touches a
+  heartbeat file. Every notification probes that port, and a message sent while the daemon is
+  down carries a warning — otherwise the outbound half keeps working and your replies vanish
+  with nothing to show for it.
 - **Queue instead of interrupting:** an order sent while the pane is working (or waiting on
   a permission) is held, not typed into a running turn, and delivered the moment the agent
   goes idle. You are told it was queued.
@@ -47,6 +51,7 @@ chat, and every reply is routed back to a specific terminal.
 | `/parar s:<id>` | send Esc — interrupt without killing the terminal |
 | `/diff s:<id> [file]` | what the agent actually changed, not what it says it changed |
 | `/tela s:<id>` | last 25 lines of that pane |
+| `/retomar s:<id>` | reopen a closed terminal on the same session |
 | `/panes` | list live terminals with their ids |
 | `/pastas [filter]` | list project folders you can spawn into |
 | `/novo <folder> \| <task>` | new Claude terminal in that folder, already working |
@@ -151,6 +156,20 @@ Three failures worth knowing about, all found the hard way:
 - **Node on Windows refuses to `spawn` a `.cmd`** — call `node wmux.js` directly, not the shim.
 - **`send-key` takes the key first:** `send-key enter --surface <id>`.
 - **An `async` Stop hook is killed** before its HTTP request finishes. Keep it synchronous.
+
+### Keeping the daemon up
+
+The lock means a second instance exits immediately, which makes a dumb supervisor enough.
+On Windows, one scheduled task every five minutes covers both boot and crash:
+
+```
+schtasks /Create /TN "ClaudeTelegramBridge" /SC MINUTE /MO 5 /F ^
+  /TR "wscript.exe \"%USERPROFILE%\.claude\hooks	elegram-bridge.vbs\""
+```
+
+`/retomar` needs a session id, which the bridge harvests from `wmux agent-state` every 30
+seconds while a pane is alive. Claude Code and OpenCode expose one and are resumed exactly;
+Codex does not, so it falls back to the last session in that folder.
 
 ## Codex CLI
 

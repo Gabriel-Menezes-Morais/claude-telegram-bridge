@@ -4,6 +4,7 @@
 // Instalado em ~/.config/opencode/plugin/telegram.js
 import { readFileSync, writeFileSync, appendFileSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
+import { connect } from "node:net";
 
 const HOME = homedir().split(String.fromCharCode(92)).join("/");
 const CONFIG = process.env.CLAUDE_TG_CONFIG || `${HOME}/.claude/telegram.json`;
@@ -16,17 +17,36 @@ const loadCfg = () => {
 };
 
 // Registra o pane e devolve o rodape que permite responder de volta.
-const surfaceMark = (label, cwd, lastMsg) => {
+const surfaceMark = (label, cwd, lastMsg, sessionId) => {
   const full = process.env.WMUX_SURFACE_ID || "";
   if (!full) return "";
   const short = full.replace(/^surf-/, "").slice(0, 8);
   try {
     const map = existsSync(SURFACES) ? JSON.parse(readFileSync(SURFACES, "utf8")) : {};
-    map[short] = { ...(map[short] || {}), surface: full, label, agent: "opencode", cwd: cwd || undefined, at: Date.now(), lastMsg: String(lastMsg || "").slice(0, 160) };
+    map[short] = { ...(map[short] || {}), surface: full, label, agent: "opencode", cwd: cwd || undefined, sessionId: sessionId || undefined, at: Date.now(), lastMsg: String(lastMsg || "").slice(0, 160) };
     map.__last = short;
     writeFileSync(SURFACES, JSON.stringify(map, null, 2));
   } catch {}
   return `\n\nResponda esta mensagem para falar com este terminal [s:${short}]`;
+};
+
+
+// A ponte viva mantem a trava na 49787. Sem ela a notificacao chega, mas a
+// resposta do celular nao volta.
+const pontePerto = () => new Promise((res) => {
+  const s = connect({ port: 49787, host: "127.0.0.1" });
+  const fim = (v) => { try { s.destroy(); } catch {} res(v); };
+  s.setTimeout(800);
+  s.once("connect", () => fim(true));
+  s.once("timeout", () => fim(false));
+  s.once("error", () => fim(false));
+});
+
+const avisoPonte = async () => {
+  if (await pontePerto()) return "";
+  return `
+
+[!] Ponte offline: sua resposta NAO vai chegar. Rode: node "${HOME}/.claude/hooks/telegram-bridge.mjs"`;
 };
 
 const send = async (text) => {
@@ -80,14 +100,14 @@ export const TelegramPlugin = async ({ directory }) => {
         const body = (lastText.get(id) || "").trim();
         lastText.delete(id);
         if (!body) return;
-        await send(`🟠 opencode · ${label}\n\n${body}${surfaceMark(label, directory, body)}`);
+        await send(`🟠 opencode · ${label}\n\n${body}${surfaceMark(label, directory, body, id)}${await avisoPonte()}`);
         return;
       }
 
       if (type === "permission.updated") {
         const p = event.properties || {};
         const what = p.title || p.type || "precisa de voce";
-        await send(`🔔 opencode · ${label}\n${what}${surfaceMark(label, directory, what)}`);
+        await send(`🔔 opencode · ${label}\n${what}${surfaceMark(label, directory, what, p.sessionID)}${await avisoPonte()}`);
       }
     },
   };
