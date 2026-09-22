@@ -38,6 +38,8 @@ chat, and every reply is routed back to a specific terminal.
 | `/pastas [filter]` | list project folders you can spawn into |
 | `/novo <folder> \| <task>` | new Claude terminal in that folder, already working |
 | `/nome s:<id> <alias>` | give a terminal a name that is easy to say out loud |
+| `/codex <folder> \| <task>` | the same, with Codex CLI |
+| `/scan` | register panes you opened by hand |
 | `/matar s:<id>` | kill that terminal |
 | `/ajuda` | the list above |
 
@@ -135,6 +137,34 @@ Three failures worth knowing about, all found the hard way:
 - **Node on Windows refuses to `spawn` a `.cmd`** — call `node wmux.js` directly, not the shim.
 - **`send-key` takes the key first:** `send-key enter --surface <id>`.
 - **An `async` Stop hook is killed** before its HTTP request finishes. Keep it synchronous.
+
+## Codex CLI
+
+The same bridge drives [Codex CLI](https://developers.openai.com/codex/cli) panes.
+
+**Out** — Codex has no hook protocol like Claude Code's, but it has `notify`, a program it
+calls with one JSON argument. Add to `~/.codex/config.toml`, above any `[table]`:
+
+```toml
+notify = ["node", "C:/Users/you/.claude/hooks/codex-notify.mjs"]
+```
+
+Forward slashes: in a double-quoted TOML string a backslash is an escape, so a Windows path
+with `\` fails to parse. It fires on `agent-turn-complete`, carrying the last assistant
+message, and registers the pane exactly like the Claude hook does.
+
+**Back** — identical. `wmux send` types into any pane, whatever is running inside it, so
+addressing by id, folder alias or spoken name works unchanged.
+
+```
+/codex myapp | fix the failing test
+/scan                      # register panes you opened by hand
+```
+
+**One limitation:** `wmux read-screen` returns an empty buffer for Codex's TUI, so the
+bridge cannot detect when Codex finished booting the way it does for Claude (where it also
+answers the "trust this folder" prompt). `/codex` waits a fixed `bootSeconds` (default 15)
+before sending the task. Raise it on a slow machine.
 
 ## License
 

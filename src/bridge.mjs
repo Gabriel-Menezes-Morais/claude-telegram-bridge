@@ -31,7 +31,18 @@ const log = (m) => { try { appendFileSync(LOG, `${new Date().toISOString()} ${m}
 let cfg = JSON.parse(readFileSync(CONFIG, "utf8"));
 // Relido a cada mensagem: mudar requireTarget/minTurnSeconds nao exige reiniciar.
 const reloadCfg = () => { try { cfg = JSON.parse(readFileSync(CONFIG, "utf8")); } catch {} };
-const api = (m, body) => fetch(`https://api.telegram.org/bot${cfg.botToken}/${m}`, {
+
+// Wi-Fi oscila: uma falha de rede nao pode engolir um audio em silencio.
+const fetchRetry = async (url, opts = {}, tries = 3) => {
+  let last;
+  for (let i = 0; i < tries; i++) {
+    try { return await fetch(url, opts); } catch (e) { last = e; log(`rede falhou (${i + 1}/${tries}): ${e.cause?.code || e.message}`); }
+    await new Promise((r) => setTimeout(r, 1000 * (i + 1)));
+  }
+  throw last;
+};
+
+const api = (m, body) => fetchRetry(`https://api.telegram.org/bot${cfg.botToken}/${m}`, {
   method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
 }).then((r) => r.json());
 
@@ -72,18 +83,18 @@ const waitReady = async (surface, seconds = 90) => {
   return false;
 };
 
-const registerSurface = (surface, label, agentId) => {
+const registerSurface = (surface, label, agentId, agent = "claude") => {
   const short = surface.replace(/^surf-/, "").slice(0, 8);
   try {
     const map = existsSync(SURFACES_W) ? JSON.parse(readFileSync(SURFACES_W, "utf8")) : {};
-    map[short] = { surface, label, agentId, at: Date.now() };
+    map[short] = { surface, label, agentId, agent, at: Date.now() };
     writeFileSync(SURFACES_W, JSON.stringify(map, null, 2));
   } catch {}
   return short;
 };
 
 // /novo [pasta] | tarefa  -> abre um terminal Claude novo e ja manda a tarefa
-const spawnAgent = async (arg) => {
+const spawnAgent = async (arg, cli = "claude") => {
   const [rawCwd, ...rest] = arg.split("|");
   const task = rest.join("|").trim();
   if (!task) { await reply("Use: /novo <pasta ou apelido> | <tarefa>" + String.fromCharCode(10) + "Ex: /novo hunter | rode os testes" + String.fromCharCode(10) + "/pastas mostra os apelidos."); return; }
@@ -96,16 +107,22 @@ const spawnAgent = async (arg) => {
   }
   const cwd = dir.full;
 
-  const out = await wmux(["agent", "spawn", "--cmd", "claude", "--cwd", cwd, "--label", cwd.split(/[\/]/).filter(Boolean).pop() || "claude"]);
+  const out = await wmux(["agent", "spawn", "--cmd", cli, "--cwd", cwd, "--label", cwd.split(/[\/]/).filter(Boolean).pop() || cli]);
   let ids;
   try { ids = JSON.parse(out); } catch { await reply(`Nao consegui abrir o terminal em ${cwd}.`); return; }
 
   const label = cwd.split(/[\/]/).filter(Boolean).pop() || "claude";
-  const short = registerSurface(ids.surfaceId, label, ids.agentId);
-  await reply(`Abrindo terminal em ${label} [s:${short}]. Mando a tarefa quando ele subir.`);
+  const short = registerSurface(ids.surfaceId, label, ids.agentId, cli);
+  await reply(`Abrindo ${cli} em ${label} [s:${short}]. Mando a tarefa quando ele subir.`);
 
-  const ready = await waitReady(ids.surfaceId);
-  if (!ready) { await reply(`O terminal [s:${short}] demorou a subir. Mande a tarefa na mao com s:${short} <texto>.`); return; }
+  if (cli === "claude") {
+    const ready = await waitReady(ids.surfaceId);
+    if (!ready) { await reply(`O terminal [s:${short}] demorou a subir. Mande a tarefa na mao com s:${short} <texto>.`); return; }
+  } else {
+    // O read-screen do wmux volta vazio na TUI do Codex, entao nao da para
+    // detectar "pronto": espera fixa, ajustavel em bootSeconds.
+    await new Promise((r) => setTimeout(r, (cfg.bootSeconds ?? 15) * 1000));
+  }
 
   await wmux(["send", "--surface", ids.surfaceId, task]);
   await new Promise((r) => setTimeout(r, 400));
@@ -119,6 +136,8 @@ const HELP = [
   "/panes  - lista os terminais e ids",
   "/pastas [filtro]  - lista os apelidos de pasta",
   "/novo <apelido> | <tarefa>  - abre um Claude novo ja com a tarefa",
+  "/codex <apelido> | <tarefa>  - o mesmo, com o Codex",
+  "/scan  - registra panes abertos na mao",
   "/nome s:<id> <apelido>  - da um nome falavel ao terminal",
   "/matar s:<id>  - encerra aquele terminal",
   "",
@@ -197,9 +216,9 @@ const resolveDir = (raw) => {
 // Audio do Telegram -> texto. Voce fala, o terminal recebe digitado.
 const transcribe = async (fileId) => {
   if (!cfg.openaiKey) { log("sem openaiKey"); return null; }
-  const info = await (await fetch(`https://api.telegram.org/bot${cfg.botToken}/getFile?file_id=${fileId}`)).json();
+  const info = await (await fetchRetry(`https://api.telegram.org/bot${cfg.botToken}/getFile?file_id=${fileId}`)).json();
   if (!info.ok) { log(`getFile falhou: ${info.description}`); return null; }
-  const audio = await fetch(`https://api.telegram.org/file/bot${cfg.botToken}/${info.result.file_path}`);
+  const audio = await fetchRetry(`https://api.telegram.org/file/bot${cfg.botToken}/${info.result.file_path}`);
   const blob = await audio.blob();
 
   const form = new FormData();
@@ -207,7 +226,7 @@ const transcribe = async (fileId) => {
   form.append("model", cfg.transcribeModel || "whisper-1");
   if (cfg.transcribeLang) form.append("language", cfg.transcribeLang);
 
-  const r = await fetch("https://api.openai.com/v1/audio/transcriptions", {
+  const r = await fetchRetry("https://api.openai.com/v1/audio/transcriptions", {
     method: "POST", headers: { authorization: `Bearer ${cfg.openaiKey}` }, body: form,
   });
   const j = await r.json();
@@ -327,8 +346,10 @@ const handle = async (update) => {
   const voice = msg.voice || msg.audio || msg.video_note;
   let text = (msg.text || "").trim();
   if (!text && voice) {
-    const heard = await transcribe(voice.file_id);
-    if (!heard) { await reply("Nao consegui transcrever esse audio."); return; }
+    let heard = null;
+    try { heard = await transcribe(voice.file_id); }
+    catch (e) { log(`transcricao explodiu: ${e?.message}`); }
+    if (!heard) { await reply("Nao consegui transcrever esse audio (rede ou transcricao falhou). Mande de novo."); return; }
     text = heard;
     await reply(`Ouvi: ${heard}`);
   }
@@ -356,6 +377,18 @@ const handle = async (update) => {
   }
 
   if (/^\/novo/.test(text)) { await spawnAgent(text.replace(/^\/novo/, "")); return; }
+  if (/^\/codex/.test(text)) { await spawnAgent(text.replace(/^\/codex/, ""), "codex"); return; }
+
+  // Panes abertos na mao (inclusive Codex) nao se registram sozinhos ate
+  // notificarem. /scan pega todos os que o wmux conhece.
+  if (/^\/scan/.test(text)) {
+    const out = await wmux(["agent", "list"]);
+    let live = [];
+    try { live = (JSON.parse(out).agents || []).filter((a) => a.status === "running"); } catch {}
+    const added = live.map((a) => `[s:${registerSurface(a.surfaceId, a.label || a.cmd, a.agentId, a.cmd)}] ${a.label || a.cmd} (${a.cmd})`);
+    await reply(added.length ? ["Registrados:", ...added].join(String.fromCharCode(10)) : "Nenhum pane ativo encontrado.");
+    return;
+  }
 
   if (/^\/matar/.test(text)) {
     const key = text.replace(/^\/matar/, "").trim().replace(/^\[?s:/, "").replace(/\]$/, "");
@@ -415,7 +448,11 @@ while (true) {
     for (const u of r.result) {
       offset = u.update_id + 1;
       writeFileSync(OFFSET, String(offset));
-      try { await handle(u); } catch (e) { log(`handle erro: ${e?.message} | ${String(e?.stack).split(String.fromCharCode(10))[1] || ""}`); }
+      try { await handle(u); }
+      catch (e) {
+        log(`handle erro: ${e?.message} | ${String(e?.stack).split(String.fromCharCode(10))[1] || ""}`);
+        try { await reply(`Falhei ao processar sua mensagem: ${e?.message}. Mande de novo.`); } catch {}
+      }
     }
   } catch (e) {
     log(`loop erro: ${e?.message}`);

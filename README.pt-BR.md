@@ -35,6 +35,8 @@ e cada resposta volta para um terminal específico.
 | `/pastas [filtro]` | lista as pastas de projeto disponíveis |
 | `/novo <pasta> \| <tarefa>` | terminal Claude novo naquela pasta, já trabalhando |
 | `/nome s:<id> <apelido>` | dá ao terminal um nome fácil de falar |
+| `/codex <pasta> \| <tarefa>` | o mesmo, com o Codex CLI |
+| `/scan` | registra panes abertos na mão |
 | `/matar s:<id>` | encerra aquele terminal |
 | `/ajuda` | a lista acima |
 
@@ -105,6 +107,35 @@ Três armadilhas que custaram tempo:
 - **Node no Windows recusa `spawn` de `.cmd`** — chame `node wmux.js` direto, não o shim.
 - **`send-key` recebe a tecla primeiro:** `send-key enter --surface <id>`.
 - **Hook `Stop` com `async` é morto** antes de a requisição HTTP terminar.
+
+## Codex CLI
+
+A mesma ponte serve panes do [Codex CLI](https://developers.openai.com/codex/cli).
+
+**Ida** — o Codex não tem protocolo de hooks como o Claude Code, mas tem `notify`, um
+programa chamado com um argumento JSON. Em `~/.codex/config.toml`, acima de qualquer
+`[tabela]`:
+
+```toml
+notify = ["node", "C:/Users/voce/.claude/hooks/codex-notify.mjs"]
+```
+
+Barras normais: em string TOML com aspas duplas a barra invertida é escape, e um caminho
+Windows com `\` não faz o parse. Dispara em `agent-turn-complete`, com a última mensagem
+do agente, e registra o pane igual ao hook do Claude.
+
+**Volta** — idêntica. O `wmux send` digita em qualquer pane, seja lá o que estiver rodando
+dentro, então id, apelido de pasta e nome falado funcionam sem mudança.
+
+```
+/codex myapp | conserta o teste que quebrou
+/scan                      # registra panes abertos na mão
+```
+
+**Uma limitação:** o `wmux read-screen` volta vazio na TUI do Codex, então a ponte não
+detecta quando o Codex terminou de subir, como faz com o Claude (onde ainda responde o
+"trust this folder"). O `/codex` espera um `bootSeconds` fixo (padrão 15) antes de mandar a
+tarefa. Aumente em máquina lenta.
 
 ## Licença
 
