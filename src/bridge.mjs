@@ -33,16 +33,18 @@ let cfg = JSON.parse(readFileSync(CONFIG, "utf8"));
 const reloadCfg = () => { try { cfg = JSON.parse(readFileSync(CONFIG, "utf8")); } catch {} };
 
 // Wi-Fi oscila: uma falha de rede nao pode engolir um audio em silencio.
-const fetchRetry = async (url, opts = {}, tries = 3) => {
+const fetchRetry = async (url, opts = {}, tries = 4) => {
   let last;
   for (let i = 0; i < tries; i++) {
-    try { return await fetch(url, opts); } catch (e) { last = e; log(`rede falhou (${i + 1}/${tries}): ${e.cause?.code || e.message}`); }
-    await new Promise((r) => setTimeout(r, 1000 * (i + 1)));
+    try { const { timeoutMs = 8000, ...rest } = opts; return await fetch(url, { ...rest, signal: AbortSignal.timeout(timeoutMs) }); } catch (e) { last = e; log(`rede falhou (${i + 1}/${tries}): ${e.cause?.code || e.message}`); }
+    await new Promise((r) => setTimeout(r, 700 * (i + 1)));
   }
   throw last;
 };
 
 const api = (m, body) => fetchRetry(`https://api.telegram.org/bot${cfg.botToken}/${m}`, {
+  // long-poll precisa de folga; o resto falha rapido
+  timeoutMs: m === "getUpdates" ? 45000 : 8000,
   method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
 }).then((r) => r.json());
 

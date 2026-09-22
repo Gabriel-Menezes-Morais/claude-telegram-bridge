@@ -39,11 +39,11 @@ try {
   const body = (payload["last-assistant-message"] || "(turno terminou sem texto)").trim();
   const asked = (payload["input-messages"] || []).join(" ").slice(0, 80);
 
-  const fetchRetry = async (url, opts, tries = 3) => {
+  const fetchRetry = async (url, opts, tries = 4) => {
     let last;
     for (let i = 0; i < tries; i++) {
-      try { return await fetch(url, opts); } catch (e) { last = e; log(`rede falhou (${i + 1}/${tries}): ${e.cause?.code || e.message}`); }
-      await new Promise((r) => setTimeout(r, 1000 * (i + 1)));
+      try { return await fetch(url, { ...opts, signal: AbortSignal.timeout(8000) }); } catch (e) { last = e; log(`rede falhou (${i + 1}/${tries}): ${e.cause?.code || e.message}`); }
+      await new Promise((r) => setTimeout(r, 700 * (i + 1)));
     }
     throw last;
   };

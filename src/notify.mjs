@@ -48,8 +48,20 @@ const surfaceMark = (label, lastMsg) => {
   return `\n\nResponda esta mensagem para falar com este terminal [s:${short}]`;
 };
 
+// A primeira conexao nesta rede costuma estourar; falhar rapido e repetir
+// chega antes de esperar o timeout longo do undici.
+const fetchRetry = async (url, opts, tries = 4) => {
+  let last;
+  for (let i = 0; i < tries; i++) {
+    try { return await fetch(url, { ...opts, signal: AbortSignal.timeout(8000) }); }
+    catch (e) { last = e; log(`rede falhou (${i + 1}/${tries}): ${e.cause?.code || e.name}`); }
+    await new Promise((r) => setTimeout(r, 700 * (i + 1)));
+  }
+  throw last;
+};
+
 const send = async (token, chatId, text, keyboard) => {
-  const r = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+  const r = await fetchRetry(`https://api.telegram.org/bot${token}/sendMessage`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
