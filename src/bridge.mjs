@@ -137,6 +137,7 @@ const HELP = [
   "/pastas [filtro]  - lista os apelidos de pasta",
   "/novo <apelido> | <tarefa>  - abre um Claude novo ja com a tarefa",
   "/codex <apelido> | <tarefa>  - o mesmo, com o Codex",
+  "/opencode <apelido> | <tarefa>  - o mesmo, com o OpenCode",
   "/scan  - registra panes abertos na mao",
   "/nome s:<id> <apelido>  - da um nome falavel ao terminal",
   "/matar s:<id>  - encerra aquele terminal",
@@ -378,6 +379,7 @@ const handle = async (update) => {
 
   if (/^\/novo/.test(text)) { await spawnAgent(text.replace(/^\/novo/, "")); return; }
   if (/^\/codex/.test(text)) { await spawnAgent(text.replace(/^\/codex/, ""), "codex"); return; }
+  if (/^\/opencode/.test(text)) { await spawnAgent(text.replace(/^\/opencode/, ""), "opencode"); return; }
 
   // Panes abertos na mao (inclusive Codex) nao se registram sozinhos ate
   // notificarem. /scan pega todos os que o wmux conhece.

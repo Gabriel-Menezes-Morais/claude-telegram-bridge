@@ -1,6 +1,6 @@
 # claude-telegram-bridge
 
-Controle seus terminais do **Claude Code** pelo Telegram — veja o que cada agente está
+Controle seus terminais do **Claude Code**, **Codex** e **OpenCode** pelo Telegram — veja o que cada agente está
 fazendo, responda, e abra agentes novos, sem ficar na frente do notebook.
 
 O Remote Control nativo do Claude Code amarra o push à conta logada no app do celular.
@@ -36,6 +36,7 @@ e cada resposta volta para um terminal específico.
 | `/novo <pasta> \| <tarefa>` | terminal Claude novo naquela pasta, já trabalhando |
 | `/nome s:<id> <apelido>` | dá ao terminal um nome fácil de falar |
 | `/codex <pasta> \| <tarefa>` | o mesmo, com o Codex CLI |
+| `/opencode <pasta> \| <tarefa>` | o mesmo, com o OpenCode |
 | `/scan` | registra panes abertos na mão |
 | `/matar s:<id>` | encerra aquele terminal |
 | `/ajuda` | a lista acima |
@@ -136,6 +137,21 @@ dentro, então id, apelido de pasta e nome falado funcionam sem mudança.
 detecta quando o Codex terminou de subir, como faz com o Claude (onde ainda responde o
 "trust this folder"). O `/codex` espera um `bootSeconds` fixo (padrão 15) antes de mandar a
 tarefa. Aumente em máquina lenta.
+
+## OpenCode
+
+Também suportado. O OpenCode não tem hook de processo nem programa `notify` — tem um
+plugin que recebe o fluxo de eventos da sessão. Copie `src/opencode-plugin.js` para
+`~/.config/opencode/plugin/telegram.js`; ele é carregado no próximo start.
+
+Ele escuta `session.idle` (turno terminou) e `permission.updated` (esperando você), e cruza
+com `message.updated` para separar o texto do agente do seu — uma parte de texto não carrega
+o papel, e sem esse cruzamento a ponte devolveria o seu próprio prompt.
+
+```
+/opencode myapp | refatora esse módulo
+```
+
 
 ## Licença
 

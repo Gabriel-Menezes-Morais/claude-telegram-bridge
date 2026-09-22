@@ -1,6 +1,6 @@
 # claude-telegram-bridge
 
-Drive your **Claude Code** terminals from Telegram — see what every agent is doing, reply,
+Drive your **Claude Code**, **Codex** and **OpenCode** terminals from Telegram — see what every agent is doing, reply,
 and spawn new agents, without sitting in front of the laptop.
 
 Claude Code's own Remote Control ties push to the Claude account logged into the phone app.
@@ -39,6 +39,7 @@ chat, and every reply is routed back to a specific terminal.
 | `/novo <folder> \| <task>` | new Claude terminal in that folder, already working |
 | `/nome s:<id> <alias>` | give a terminal a name that is easy to say out loud |
 | `/codex <folder> \| <task>` | the same, with Codex CLI |
+| `/opencode <folder> \| <task>` | the same, with OpenCode |
 | `/scan` | register panes you opened by hand |
 | `/matar s:<id>` | kill that terminal |
 | `/ajuda` | the list above |
@@ -165,6 +166,22 @@ addressing by id, folder alias or spoken name works unchanged.
 bridge cannot detect when Codex finished booting the way it does for Claude (where it also
 answers the "trust this folder" prompt). `/codex` waits a fixed `bootSeconds` (default 15)
 before sending the task. Raise it on a slow machine.
+
+## OpenCode
+
+Also supported. OpenCode has neither process hooks nor a `notify` program — it has a
+plugin that receives the session event stream. Copy `src/opencode-plugin.js` to
+`~/.config/opencode/plugin/telegram.js`; it is picked up on the next start.
+
+It listens to `session.idle` (turn finished) and `permission.updated` (waiting on you), and
+cross-references `message.updated` to keep the assistant's text apart from your own — a text
+part does not carry a role, so without that cross-reference the bridge would send your own
+prompt back to you.
+
+```
+/opencode myapp | refactor this module
+```
+
 
 ## License
 
