@@ -95,6 +95,9 @@ try {
   if (event === "Notification") {
     const short = (process.env.WMUX_SURFACE_ID || "").replace(/^surf-/, "").slice(0, 8);
     const msg = input.message || "precisa de voce";
+    // "esperando voce digitar" nao e pedido de permissao: notificar isso
+    // transforma silencio em alarme, e os botoes Sim/Nao nem se aplicam.
+    if (/waiting for your input|is waiting|esperando/i.test(msg)) { log(`pulou ocioso: ${msg.slice(0, 60)}`); process.exit(0); }
     // Botao so faz sentido com pane conhecido: o callback precisa do id.
     const keyboard = short ? [[
       { text: "Sim", callback_data: `k:${short}:1` },
