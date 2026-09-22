@@ -3,3 +3,4 @@ telegram.json
 *.offset
 telegram-surfaces.json
 node_modules/
+telegram-anexos/
