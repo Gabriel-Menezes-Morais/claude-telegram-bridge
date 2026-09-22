@@ -12,13 +12,13 @@ const LOG = `${HOME}/.claude/telegram-hook.log`;
 const log = (m) => { try { appendFileSync(LOG, `${new Date().toISOString()} [codex] ${m}\n`); } catch {} };
 
 // Registra o pane e devolve o rodape que permite responder de volta.
-const surfaceMark = (label) => {
+const surfaceMark = (label, cwd) => {
   const full = process.env.WMUX_SURFACE_ID || "";
   if (!full) return "";
   const short = full.replace(/^surf-/, "").slice(0, 8);
   try {
     const map = existsSync(SURFACES) ? JSON.parse(readFileSync(SURFACES, "utf8")) : {};
-    map[short] = { ...(map[short] || {}), surface: full, label, agent: "codex", at: Date.now() };
+    map[short] = { ...(map[short] || {}), surface: full, label, agent: "codex", cwd: cwd || undefined, at: Date.now(), lastMsg: String(globalThis.__tgLast || "").slice(0, 160) };
     map.__last = short;
     writeFileSync(SURFACES, JSON.stringify(map, null, 2));
   } catch {}
@@ -36,6 +36,7 @@ try {
   if (!cfg.botToken || !cfg.chatId) process.exit(0);
 
   const label = (process.cwd().split(/[\/]/).filter(Boolean).pop() || "codex");
+  globalThis.__tgLast = payload["last-assistant-message"] || "";
   const body = (payload["last-assistant-message"] || "(turno terminou sem texto)").trim();
   const asked = (payload["input-messages"] || []).join(" ").slice(0, 80);
 
@@ -48,7 +49,7 @@ try {
     throw last;
   };
 
-  const text = `🤖 codex · ${label}${asked ? `\n↳ ${asked}` : ""}\n\n${body}${surfaceMark(label)}`;
+  const text = `🤖 codex · ${label}${asked ? `\n↳ ${asked}` : ""}\n\n${body}${surfaceMark(label, process.cwd())}`;
   const r = await fetchRetry(`https://api.telegram.org/bot${cfg.botToken}/sendMessage`, {
     method: "POST",
     headers: { "content-type": "application/json" },

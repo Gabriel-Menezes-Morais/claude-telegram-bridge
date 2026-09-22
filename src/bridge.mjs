@@ -4,6 +4,7 @@ import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync, rea
 import { join } from "node:path";
 import { tmpdir, homedir } from "node:os";
 import { execFile } from "node:child_process";
+import { mkdir } from "node:fs/promises";
 import { createServer } from "node:net";
 
 const HOME = homedir().split(String.fromCharCode(92)).join("/");
@@ -49,6 +50,9 @@ const api = (m, body) => fetchRetry(`https://api.telegram.org/bot${cfg.botToken}
 }).then((r) => r.json());
 
 const reply = async (text) => {
+  if (text.length > 3800) {
+    try { await sendDocument("resposta.md", text, text.slice(0, 200) + " ..."); return { ok: true }; } catch {}
+  }
   const r = await api("sendMessage", { chat_id: cfg.chatId, text: text.slice(0, 3800) });
   log(r?.ok ? `reply enviado msg_id=${r.result?.message_id}: ${text.slice(0, 60)}` : `reply falhou: ${r?.description || "sem resposta"}`);
   return r;
@@ -138,6 +142,11 @@ const HELP = [
   "/status  - painel: quem roda, quem espera voce, ultima linha",
   "/panes  - lista os terminais e ids",
   "/parar s:<id>  - manda Esc, interrompe sem matar",
+  "/diff s:<id> [arquivo]  - o que o agente mudou de verdade",
+  "/tela s:<id>  - ultimas 25 linhas do pane",
+  "",
+  "Foto ou arquivo: mande respondendo a notificacao do terminal;",
+  "a legenda vira a ordem e o caminho do arquivo vai junto.",
   "/pastas [filtro]  - lista os apelidos de pasta",
   "/novo <apelido> | <tarefa>  - abre um Claude novo ja com a tarefa",
   "/codex <apelido> | <tarefa>  - o mesmo, com o Codex",
@@ -239,6 +248,99 @@ const transcribe = async (fileId) => {
   return (j.text || "").trim();
 };
 
+
+const QUEUE = `${HOME}/.claude/telegram-queue.json`;
+const readQueue = () => { try { return existsSync(QUEUE) ? JSON.parse(readFileSync(QUEUE, "utf8")) : []; } catch { return []; } };
+const writeQueue = (q) => { try { writeFileSync(QUEUE, JSON.stringify(q, null, 2)); } catch {} };
+
+// Estado do pane pelo wmux. "working" = digitar agora cai no meio da execucao.
+const paneState = async (surface) => {
+  try { return JSON.parse(await wmux(["agent-state", "--surface", surface]))?.state?.state || null; } catch { return null; }
+};
+
+const typeInto = async (surface, body) => {
+  await wmux(["send", "--surface", surface, body]);
+  // a TUI precisa de um respiro entre o texto colado e o enter
+  await new Promise((r) => setTimeout(r, 400));
+  await wmux(["send-key", "enter", "--surface", surface]);
+};
+
+const marcaCelular = (key) => {
+  // A proxima resposta deste pane volta para o celular mesmo se for curta.
+  try { mkdirSync(STATE, { recursive: true }); writeFileSync(join(STATE, `phone-${key}.txt`), String(Date.now())); } catch {}
+};
+
+// Entrega agora, ou enfileira se o agente estiver trabalhando ou bloqueado.
+const deliver = async (target, body) => {
+  const st = await paneState(target.surface);
+  if (st === "working" || st === "blocked") {
+    const q = readQueue();
+    q.push({ key: target.key, surface: target.surface, label: target.label, body, at: Date.now() });
+    writeQueue(q);
+    log(`enfileirado para ${target.label} [${target.key}] (estado ${st})`);
+    const quantos = q.filter((x) => x.key === target.key).length;
+    await reply(`${target.label} esta ${st === "blocked" ? "esperando permissao" : "trabalhando"}. Guardei na fila (${quantos}) e mando quando terminar.`);
+    return;
+  }
+  marcaCelular(target.key);
+  await typeInto(target.surface, body);
+  log(`enviado para ${target.label} [${target.key}]: ${body.slice(0, 80)}`);
+  await reply(`-> ${target.label} [s:${target.key}]`);
+};
+
+// Despeja a fila assim que o pane sai de "working". Um item por pane por vez,
+// senao tudo empilha na mesma tela e vira uma mensagem so.
+const flushQueue = async () => {
+  const q = readQueue();
+  if (!q.length) return;
+  const restante = [];
+  const jaEnviado = new Set();
+  for (const item of q) {
+    if (jaEnviado.has(item.key)) { restante.push(item); continue; }
+    const st = await paneState(item.surface);
+    if (st === "working" || st === "blocked") { restante.push(item); continue; }
+    marcaCelular(item.key);
+    await typeInto(item.surface, item.body);
+    jaEnviado.add(item.key);
+    log(`fila -> ${item.label} [${item.key}]: ${item.body.slice(0, 60)}`);
+    await reply(`Da fila -> ${item.label} [s:${item.key}]: ${item.body.slice(0, 60)}`);
+  }
+  writeQueue(restante);
+};
+
+
+// Resposta longa vira arquivo em vez de ser cortada em 3800 caracteres.
+const sendDocument = async (nome, conteudo, legenda) => {
+  const form = new FormData();
+  form.append("chat_id", String(cfg.chatId));
+  form.append("document", new Blob([conteudo], { type: "text/markdown" }), nome);
+  if (legenda) form.append("caption", legenda.slice(0, 900));
+  const r = await fetchRetry(`https://api.telegram.org/bot${cfg.botToken}/sendDocument`, { method: "POST", body: form });
+  log(`documento ${nome} http ${r.status}`);
+};
+
+const git = (cwd, args) => new Promise((res) => {
+  execFile("git", ["-C", cwd, ...args], { windowsHide: true, maxBuffer: 8e6 }, (err, out, errOut) => {
+    res(String(out || errOut || (err ? err.message : "")));
+  });
+});
+
+// Baixa foto/documento do Telegram para a pasta do terminal.
+const baixarAnexo = async (fileId, nomeSugerido, destinoDir) => {
+  const info = await (await fetchRetry(`https://api.telegram.org/bot${cfg.botToken}/getFile?file_id=${fileId}`)).json();
+  if (!info.ok) throw new Error(info.description || "getFile falhou");
+  const r = await fetchRetry(`https://api.telegram.org/file/bot${cfg.botToken}/${info.result.file_path}`);
+  const buf = Buffer.from(await r.arrayBuffer());
+  const dir = `${destinoDir}/telegram-anexos`;
+  await mkdir(dir, { recursive: true });
+  const ext = (info.result.file_path.split(".").pop() || "bin").toLowerCase();
+  const nome = nomeSugerido || `${new Date().toISOString().replace(/[:.]/g, "-")}.${ext}`;
+  const destino = `${dir}/${nome}`;
+  writeFileSync(destino, buf);
+  log(`anexo salvo: ${destino} (${buf.length} bytes)`);
+  return destino;
+};
+
 const surfaces = () => { try { return JSON.parse(readFileSync(SURFACES, "utf8")); } catch { return {}; } };
 
 
@@ -299,7 +401,7 @@ const matchSpoken = (text) => {
   const body = original.slice(cut + best.consumed).replace(/^[,.:;!?\s]+/, "").trim();
   if (!body) return null;
   log(`audio roteado por nome "${best.k.words}" (erro ${best.d})`);
-  return { key: best.k.key, surface: best.k.surface, label: best.k.alias || best.k.label, body };
+  return { key: best.k.key, surface: best.k.surface, cwd: best.k.cwd, label: best.k.alias || best.k.label, body };
 };
 
 // Tres formas de dizer para qual terminal vai, nesta ordem:
@@ -308,7 +410,7 @@ const matchSpoken = (text) => {
 //   3. nenhuma das duas -> o ultimo terminal que notificou
 const resolve = (update, text) => {
   const map = surfaces();
-  const pick = (key) => (key && map[key] ? { key, body: null, ...map[key] } : null);
+  const pick = (key) => (key && map[key] ? { key, body: null, ...map[key] } : null);  // ...map traz surface, label, cwd, agent
 
   const byId = text.match(/^\[?s:([0-9a-f]{4,8})\]?\s+([\s\S]+)$/i);
   if (byId) {
@@ -371,6 +473,24 @@ const handle = async (update) => {
   if (!msg) return;
   if (String(msg.chat?.id) !== String(cfg.chatId)) { log(`ignorado chat ${msg.chat?.id}`); return; }
 
+  // Foto ou arquivo: salva na pasta do terminal e entrega o caminho ao agente.
+  const anexo = (msg.photo && msg.photo[msg.photo.length - 1]) || msg.document;
+  if (anexo) {
+    const legenda = (msg.caption || "").trim();
+    const alvo2 = resolve(update, legenda || "");
+    if (!alvo2 || alvo2.missing) { await reply("Mande o arquivo respondendo a notificacao do terminal, ou com legenda s:<id> ..."); return; }
+    if (!alvo2.cwd) { await reply(`Nao sei a pasta de ${alvo2.label} ainda. Ele precisa notificar uma vez primeiro.`); return; }
+    let caminho;
+    try { caminho = await baixarAnexo(anexo.file_id, msg.document?.file_name, alvo2.cwd); }
+    catch (e) { await reply(`Nao consegui salvar o arquivo: ${e.message}`); return; }
+    const ordem = (alvo2.body || legenda)
+      ? `${alvo2.body || legenda}${String.fromCharCode(10)}${String.fromCharCode(10)}Arquivo: ${caminho}`
+      : `Recebi um arquivo em: ${caminho}`;
+    await reply(`Salvo em ${caminho}`);
+    await deliver(alvo2, ordem);
+    return;
+  }
+
   const voice = msg.voice || msg.audio || msg.video_note;
   let text = (msg.text || "").trim();
   if (!text && voice) {
@@ -410,6 +530,48 @@ const handle = async (update) => {
 
   // Panes abertos na mao (inclusive Codex) nao se registram sozinhos ate
   // notificarem. /scan pega todos os que o wmux conhece.
+  if (/^\/diff/.test(text)) {
+    const arg = text.replace(/^\/diff/, "").trim();
+    const mm = arg.match(/^\[?s:?([0-9a-f]{4,8})\]?\s*(.*)$/i);
+    const map = surfaces();
+    const key = mm ? Object.keys(map).find((k) => k !== "__last" && k.startsWith(mm[1].toLowerCase())) : map.__last;
+    const hit = key && map[key];
+    if (!hit) { await reply("Use: /diff s:<id> [arquivo]. /status lista os ids."); return; }
+    if (!hit.cwd) { await reply(`Nao sei a pasta de ${hit.label} ainda. Ele precisa notificar uma vez primeiro.`); return; }
+
+    const arquivo = (mm && mm[2] || "").trim();
+    if (arquivo) {
+      const d = await git(hit.cwd, ["diff", "--", arquivo]);
+      await reply(d.trim() ? `${hit.label} · ${arquivo}
+
+${d}` : `Sem mudancas em ${arquivo}.`);
+      return;
+    }
+    const [stat, status] = [await git(hit.cwd, ["diff", "--stat"]), await git(hit.cwd, ["status", "--short"])];
+    const corpo = [stat.trim() && `Modificado:
+${stat.trim()}`, status.trim() && `Arvore:
+${status.trim()}`].filter(Boolean).join(String.fromCharCode(10) + String.fromCharCode(10));
+    await reply(corpo ? `${hit.label} [s:${key}]
+
+${corpo}` : `Nada mudou em ${hit.label}.`);
+    return;
+  }
+
+  if (/^\/tela/.test(text)) {
+    const key0 = text.replace(/^\/tela/, "").trim().replace(/^\[?s:/, "").replace(/\]$/, "");
+    const map = surfaces();
+    const key = key0 ? Object.keys(map).find((k) => k !== "__last" && k.startsWith(key0.toLowerCase())) : map.__last;
+    const hit = key && map[key];
+    if (!hit) { await reply("Use: /tela s:<id>. /status lista os ids."); return; }
+    let tela = "";
+    try { tela = JSON.parse(await wmux(["read-screen", "--surface", hit.surface, "--lines", "25"])).text || ""; } catch {}
+    if (!tela.trim()) { await reply(`Tela vazia em ${hit.label}. O Codex nao devolve tela para o wmux.`); return; }
+    await reply(`${hit.label} [s:${key}]
+
+${tela.trim()}`);
+    return;
+  }
+
   if (/^\/status/.test(text)) {
     const map = surfaces();
     const known = Object.entries(map).filter(([k]) => k !== "__last");
@@ -492,15 +654,7 @@ const handle = async (update) => {
   if (target?.missing) { await reply(`Nao achei terminal "${target.missing}". Mande /panes para ver os ids.`); return; }
   if (!target) { await reply("Nao sei para qual terminal mandar. Responda a uma notificacao, use s:<id> ou @pasta, ou mande /panes."); return; }
 
-  const body = target.body ?? text;
-  // Marca: a proxima resposta deste pane volta para o celular mesmo se for curta.
-  try { mkdirSync(STATE, { recursive: true }); writeFileSync(join(STATE, `phone-${target.key}.txt`), String(Date.now())); } catch {}
-  await wmux(["send", "--surface", target.surface, body]);
-  // a TUI precisa de um respiro entre o texto colado e o enter
-  await new Promise((r) => setTimeout(r, 400));
-  await wmux(["send-key", "enter", "--surface", target.surface]);
-  log(`enviado para ${target.label} [${target.key}]: ${body.slice(0, 80)}`);
-  await reply(`-> ${target.label} [s:${target.key}]`);
+  await deliver(target, target.body ?? text);
 };
 
 
@@ -510,6 +664,9 @@ await new Promise((ok) => {
   guard.once("error", () => { console.error("bridge ja esta rodando"); process.exit(0); });
   guard.listen(49787, "127.0.0.1", ok);
 });
+
+try { mkdirSync(STATE, { recursive: true }); } catch {}
+setInterval(() => { flushQueue().catch((e) => log(`flush erro: ${e?.message}`)); }, 3000);
 
 let offset = existsSync(OFFSET) ? Number(readFileSync(OFFSET, "utf8")) || 0 : 0;
 log(`bridge iniciou, offset=${offset}`);

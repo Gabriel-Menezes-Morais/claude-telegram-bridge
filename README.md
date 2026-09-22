@@ -30,6 +30,12 @@ chat, and every reply is routed back to a specific terminal.
   `Ouvi: ...` so you can check it, then routed like any other message.
 - **Fuzzy names:** speech-to-text mangles names ("claude" → "Cláudio"). Routing uses edit
   distance, so the terminal is still found.
+- **Queue instead of interrupting:** an order sent while the pane is working (or waiting on
+  a permission) is held, not typed into a running turn, and delivered the moment the agent
+  goes idle. You are told it was queued.
+- **Attachments both ways:** send a photo or a file and it lands in that terminal's folder,
+  with the caption as the order and the path appended. An answer over 3800 characters comes
+  back as a `.md` file instead of being truncated.
 - **Spawning:** `/novo myapp | run the tests` opens a new Claude pane in that folder,
   answers the "trust this folder" prompt, waits for the TUI, and sends the task.
 
@@ -39,6 +45,8 @@ chat, and every reply is routed back to a specific terminal.
 | --- | --- |
 | `/status` | panel: who is running, who is waiting on you, last line of each |
 | `/parar s:<id>` | send Esc — interrupt without killing the terminal |
+| `/diff s:<id> [file]` | what the agent actually changed, not what it says it changed |
+| `/tela s:<id>` | last 25 lines of that pane |
 | `/panes` | list live terminals with their ids |
 | `/pastas [filter]` | list project folders you can spawn into |
 | `/novo <folder> \| <task>` | new Claude terminal in that folder, already working |

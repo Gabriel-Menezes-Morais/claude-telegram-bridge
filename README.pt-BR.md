@@ -27,6 +27,12 @@ e cada resposta volta para um terminal específico.
   você conferir, e roteado como qualquer mensagem.
 - **Nome falado tolerante a erro:** a transcrição troca "claude" por "Cláudio". O
   roteamento usa distância de edição e acha o terminal mesmo assim.
+- **Fila em vez de atropelo:** ordem mandada enquanto o pane está trabalhando (ou esperando
+  permissão) fica guardada, não é digitada no meio do turno, e entra assim que o agente fica
+  ocioso. O bot te avisa que enfileirou.
+- **Anexos nos dois sentidos:** mande foto ou arquivo e ele cai na pasta daquele terminal,
+  com a legenda virando a ordem e o caminho junto. Resposta acima de 3800 caracteres volta
+  como arquivo `.md` em vez de ser cortada.
 - **Abrir agentes:** `/novo myapp | roda os testes` abre um pane Claude naquela pasta,
   responde o "trust this folder", espera a TUI subir e manda a tarefa.
 
@@ -36,6 +42,8 @@ e cada resposta volta para um terminal específico.
 | --- | --- |
 | `/status` | painel: quem roda, quem espera você, última linha de cada um |
 | `/parar s:<id>` | manda Esc — interrompe sem matar o terminal |
+| `/diff s:<id> [arquivo]` | o que o agente mudou de verdade, não o que ele diz que mudou |
+| `/tela s:<id>` | últimas 25 linhas do pane |
 | `/panes` | lista os terminais vivos com os ids |
 | `/pastas [filtro]` | lista as pastas de projeto disponíveis |
 | `/novo <pasta> \| <tarefa>` | terminal Claude novo naquela pasta, já trabalhando |

@@ -35,13 +35,13 @@ const lastAssistantText = (path) => {
 };
 
 // Registra o pane wmux deste terminal e devolve o rodape que permite responder.
-const surfaceMark = (label, lastMsg) => {
+const surfaceMark = (label, lastMsg, cwd) => {
   const full = process.env.WMUX_SURFACE_ID || "";
   if (!full) return "";
   const short = full.replace(/^surf-/, "").slice(0, 8);
   try {
     const map = existsSync(SURFACES) ? JSON.parse(readFileSync(SURFACES, "utf8")) : {};
-    map[short] = { ...(map[short] || {}), surface: full, label, agent: "claude", at: Date.now(), lastMsg: String(lastMsg || "").slice(0, 160) };
+    map[short] = { ...(map[short] || {}), surface: full, label, agent: "claude", cwd: cwd || undefined, at: Date.now(), lastMsg: String(lastMsg || "").slice(0, 160) };
     map.__last = short;
     writeFileSync(SURFACES, JSON.stringify(map, null, 2));
   } catch {}
@@ -104,7 +104,7 @@ try {
       { text: "Sim, sempre", callback_data: `k:${short}:2` },
       { text: "Nao", callback_data: `k:${short}:esc` },
     ]] : null;
-    await send(cfg.botToken, cfg.chatId, `🔔 ${tag}\n${msg}${surfaceMark(label, msg)}`, keyboard);
+    await send(cfg.botToken, cfg.chatId, `🔔 ${tag}\n${msg}${surfaceMark(label, msg, input.cwd)}`, keyboard);
     process.exit(0);
   }
 
@@ -119,7 +119,7 @@ try {
     if (!fromPhone && elapsed < minTurn) { log(`pulou: ${Math.round(elapsed)}s < ${minTurn}s`); process.exit(0); }
     const body = lastAssistantText(input.transcript_path) || "(turno terminou sem texto)";
     const secs = Number.isFinite(elapsed) ? ` · ${Math.round(elapsed)}s` : "";
-    await send(cfg.botToken, cfg.chatId, `✅ ${tag}${secs}\n\n${body}${surfaceMark(label, body)}`);
+    await send(cfg.botToken, cfg.chatId, `✅ ${tag}${secs}\n\n${body}${surfaceMark(label, body, input.cwd)}`);
   }
 } catch (e) {
   log(`erro: ${e?.message}`);

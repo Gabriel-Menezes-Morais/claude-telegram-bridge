@@ -16,13 +16,13 @@ const loadCfg = () => {
 };
 
 // Registra o pane e devolve o rodape que permite responder de volta.
-const surfaceMark = (label) => {
+const surfaceMark = (label, cwd, lastMsg) => {
   const full = process.env.WMUX_SURFACE_ID || "";
   if (!full) return "";
   const short = full.replace(/^surf-/, "").slice(0, 8);
   try {
     const map = existsSync(SURFACES) ? JSON.parse(readFileSync(SURFACES, "utf8")) : {};
-    map[short] = { ...(map[short] || {}), surface: full, label, agent: "opencode", at: Date.now() };
+    map[short] = { ...(map[short] || {}), surface: full, label, agent: "opencode", cwd: cwd || undefined, at: Date.now(), lastMsg: String(lastMsg || "").slice(0, 160) };
     map.__last = short;
     writeFileSync(SURFACES, JSON.stringify(map, null, 2));
   } catch {}
@@ -80,14 +80,14 @@ export const TelegramPlugin = async ({ directory }) => {
         const body = (lastText.get(id) || "").trim();
         lastText.delete(id);
         if (!body) return;
-        await send(`🟠 opencode · ${label}\n\n${body}${surfaceMark(label)}`);
+        await send(`🟠 opencode · ${label}\n\n${body}${surfaceMark(label, directory, body)}`);
         return;
       }
 
       if (type === "permission.updated") {
         const p = event.properties || {};
         const what = p.title || p.type || "precisa de voce";
-        await send(`🔔 opencode · ${label}\n${what}${surfaceMark(label)}`);
+        await send(`🔔 opencode · ${label}\n${what}${surfaceMark(label, directory, what)}`);
       }
     },
   };
