@@ -23,6 +23,9 @@ chat, and every reply is routed back to a specific terminal.
   submitted — as if you had typed it.
 - **Addressing:** every message carries `[s:<id>]`. Reply to it, or start your message with
   `s:<id>`, `@folder`, or simply the terminal's name when speaking.
+- **Permission buttons:** a permission stop arrives with Yes / Yes always / No as inline buttons.
+  One tap sends the keystroke to that pane and the buttons are removed, so the same question
+  cannot be answered twice.
 - **Voice:** send a voice note. It is transcribed (OpenAI Whisper), echoed back as
   `Ouvi: ...` so you can check it, then routed like any other message.
 - **Fuzzy names:** speech-to-text mangles names ("claude" → "Cláudio"). Routing uses edit
@@ -34,6 +37,8 @@ chat, and every reply is routed back to a specific terminal.
 
 | Command | Does |
 | --- | --- |
+| `/status` | panel: who is running, who is waiting on you, last line of each |
+| `/parar s:<id>` | send Esc — interrupt without killing the terminal |
 | `/panes` | list live terminals with their ids |
 | `/pastas [filter]` | list project folders you can spawn into |
 | `/novo <folder> \| <task>` | new Claude terminal in that folder, already working |

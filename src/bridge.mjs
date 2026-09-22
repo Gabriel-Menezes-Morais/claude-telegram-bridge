@@ -133,7 +133,9 @@ const spawnAgent = async (arg, cli = "claude") => {
 
 const HELP = [
   "Comandos:",
+  "/status  - painel: quem roda, quem espera voce, ultima linha",
   "/panes  - lista os terminais e ids",
+  "/parar s:<id>  - manda Esc, interrompe sem matar",
   "/pastas [filtro]  - lista os apelidos de pasta",
   "/novo <apelido> | <tarefa>  - abre um Claude novo ja com a tarefa",
   "/codex <apelido> | <tarefa>  - o mesmo, com o Codex",
@@ -337,8 +339,31 @@ const resolve = (update, text) => {
   return pick(map.__last);
 };
 
+
+// Clique em botao de permissao: "k:<id>:<tecla>" vira tecla no pane.
+const handleCallback = async (q) => {
+  if (String(q.message?.chat?.id ?? q.from?.id) !== String(cfg.chatId)) { log(`callback ignorado de ${q.from?.id}`); return; }
+  const data = String(q.data || "");
+  const m = data.match(/^k:([0-9a-f]{4,8}):(.+)$/);
+  const ack = (t) => api("answerCallbackQuery", { callback_query_id: q.id, text: t.slice(0, 200) });
+  if (!m) { await ack("Botao nao reconhecido"); return; }
+
+  const map = surfaces();
+  const key = Object.keys(map).find((k) => k !== "__last" && k.startsWith(m[1]));
+  const hit = key && map[key];
+  if (!hit) { await ack("Terminal nao existe mais"); return; }
+
+  await wmux(["send-key", m[2], "--surface", hit.surface]);
+  log(`botao ${m[2]} -> ${hit.label} [${key}]`);
+  await ack(`Enviado: ${m[2]}`);
+  // Tira os botoes para nao clicar duas vezes na mesma pergunta.
+  await api("editMessageReplyMarkup", { chat_id: cfg.chatId, message_id: q.message?.message_id, reply_markup: { inline_keyboard: [] } });
+  await reply(`${m[2] === "esc" ? "Recusado" : "Aprovado"} em ${hit.label} [s:${key}]`);
+};
+
 const handle = async (update) => {
   reloadCfg();
+  if (update.callback_query) { await handleCallback(update.callback_query); return; }
   log(`recebido: ${JSON.stringify(update.message?.text || "(sem texto)").slice(0, 120)}`);
   const msg = update.message;
   if (!msg) return;
@@ -383,6 +408,50 @@ const handle = async (update) => {
 
   // Panes abertos na mao (inclusive Codex) nao se registram sozinhos ate
   // notificarem. /scan pega todos os que o wmux conhece.
+  if (/^\/status/.test(text)) {
+    const map = surfaces();
+    const known = Object.entries(map).filter(([k]) => k !== "__last");
+    if (!known.length) { await reply("Nenhum terminal registrado. Mande /scan."); return; }
+
+    let states = [];
+    try { states = JSON.parse(await wmux(["agent-state"])).states || []; } catch {}
+    let agents = [];
+    try { agents = JSON.parse(await wmux(["agent", "list"])).agents || []; } catch {}
+
+    const ha = (ms) => {
+      const s2 = Math.round((Date.now() - ms) / 1000);
+      return s2 < 90 ? `${s2}s` : s2 < 5400 ? `${Math.round(s2 / 60)}min` : `${Math.round(s2 / 3600)}h`;
+    };
+    const ICON = { working: "🔵", blocked: "🔴", done: "🟢", idle: "⚪" };
+
+    const linhas = known.sort((a, b) => b[1].at - a[1].at).map(([k, v]) => {
+      const st = states.find((x) => x.surfaceId === v.surface);
+      const ag = agents.find((x) => x.surfaceId === v.surface);
+      const morto = ag && ag.status !== "running";
+      const estado = morto ? "encerrado" : st?.state || "sem sinal";
+      const icone = morto ? "⚫" : ICON[estado] || "⚪";
+      const nome = v.alias ? `${v.alias} (${v.label})` : v.label;
+      const cabeca = `${icone} ${nome} · ${v.agent || "claude"} · ${estado} · ha ${ha(v.at)} [s:${k}]`;
+      const razao = st?.blockedReason ? `
+   aguardando: ${String(st.blockedReason).slice(0, 90)}` : "";
+      const ultima = v.lastMsg ? `
+   ${String(v.lastMsg).replace(/\s+/g, " ").slice(0, 90)}` : "";
+      return cabeca + razao + ultima;
+    });
+    await reply(["Terminais:", ...linhas].join(String.fromCharCode(10)));
+    return;
+  }
+
+  if (/^\/parar/.test(text)) {
+    const key0 = text.replace(/^\/parar/, "").trim().replace(/^\[?s:/, "").replace(/\]$/, "");
+    const map = surfaces();
+    const key = Object.keys(map).find((k) => k !== "__last" && k.startsWith(key0.toLowerCase()));
+    if (!key) { await reply(`Nao achei [s:${key0}]. /status lista os ids.`); return; }
+    await wmux(["send-key", "esc", "--surface", map[key].surface]);
+    await reply(`Esc enviado para ${map[key].label} [s:${key}]. O terminal continua vivo.`);
+    return;
+  }
+
   if (/^\/scan/.test(text)) {
     const out = await wmux(["agent", "list"]);
     let live = [];
@@ -445,7 +514,7 @@ log(`bridge iniciou, offset=${offset}`);
 
 while (true) {
   try {
-    const r = await api("getUpdates", { offset, timeout: 30, allowed_updates: ["message"] });
+    const r = await api("getUpdates", { offset, timeout: 30, allowed_updates: ["message", "callback_query"] });
     if (!r.ok) { log(`getUpdates falhou: ${r.description}`); await new Promise((s) => setTimeout(s, 5000)); continue; }
     for (const u of r.result) {
       offset = u.update_id + 1;

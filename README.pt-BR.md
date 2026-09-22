@@ -20,6 +20,9 @@ e cada resposta volta para um terminal específico.
 - **Volta:** você responde do celular e o texto é digitado naquele terminal e enviado.
 - **Endereçamento:** toda mensagem carrega `[s:<id>]`. Responda a ela, ou comece com
   `s:<id>`, `@pasta`, ou simplesmente o nome do terminal quando falar.
+- **Botões de permissão:** a parada por permissão chega com Sim / Sim sempre / Não como
+  botões. Um toque manda a tecla para aquele pane e os botões somem, então a mesma pergunta
+  não é respondida duas vezes.
 - **Áudio:** mande um áudio. Ele é transcrito (Whisper), devolvido como `Ouvi: ...` para
   você conferir, e roteado como qualquer mensagem.
 - **Nome falado tolerante a erro:** a transcrição troca "claude" por "Cláudio". O
@@ -31,6 +34,8 @@ e cada resposta volta para um terminal específico.
 
 | Comando | Faz |
 | --- | --- |
+| `/status` | painel: quem roda, quem espera você, última linha de cada um |
+| `/parar s:<id>` | manda Esc — interrompe sem matar o terminal |
 | `/panes` | lista os terminais vivos com os ids |
 | `/pastas [filtro]` | lista as pastas de projeto disponíveis |
 | `/novo <pasta> \| <tarefa>` | terminal Claude novo naquela pasta, já trabalhando |
