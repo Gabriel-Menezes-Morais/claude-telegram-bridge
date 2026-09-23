@@ -71,6 +71,29 @@ Addressing a terminal, best first on a phone:
 With `requireTarget: true` a message with no target is refused instead of guessed. That
 matters once three terminals are running.
 
+## Spawn flags
+
+An agent that stops to ask permission turns every question into a push. `spawnFlags`
+decides how `/novo`, `/codex`, `/opencode` and `/retomar` start a harness:
+
+```json
+"spawnFlags": {
+  "claude": "--dangerously-skip-permissions",
+  "codex": "--dangerously-bypass-approvals-and-sandbox",
+  "opencode": "--auto"
+}
+```
+
+It ships empty, and empty means the agent asks. Filling it means a message from your
+phone runs whatever the agent decides to run, with no prompt in between — worth it when
+you are away from the machine, not something to turn on by accident.
+
+## Message length
+
+Telegram caps a message at 4096 characters. Long answers are split on blank lines and
+sent as `(1/3)`, `(2/3)`, `(3/3)` rather than truncated, with the footer and any buttons
+on the last part only. Nothing is lost.
+
 ## Requirements
 
 - [Claude Code](https://claude.com/claude-code)

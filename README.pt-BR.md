@@ -67,6 +67,29 @@ Para endereçar um terminal, do melhor ao pior no celular:
 Com `requireTarget: true`, mensagem sem destino é recusada em vez de chutada. Isso importa
 quando há três terminais rodando.
 
+## Flags de subida
+
+Agente que para pedindo permissão transforma cada pergunta em push. O `spawnFlags`
+decide como `/novo`, `/codex`, `/opencode` e `/retomar` sobem cada harness:
+
+```json
+"spawnFlags": {
+  "claude": "--dangerously-skip-permissions",
+  "codex": "--dangerously-bypass-approvals-and-sandbox",
+  "opencode": "--auto"
+}
+```
+
+Vem vazio, e vazio significa que o agente pergunta. Preencher significa que uma mensagem
+do seu celular roda o que o agente decidir rodar, sem confirmação no meio — vale quando
+você está longe da máquina, não é coisa para ligar sem querer.
+
+## Tamanho da mensagem
+
+O Telegram limita a mensagem a 4096 caracteres. Resposta longa é quebrada em linha em
+branco e enviada como `(1/3)`, `(2/3)`, `(3/3)`, em vez de cortada, com o rodapé e os
+botões só na última parte. Nada se perde.
+
 ## Requisitos
 
 - [Claude Code](https://claude.com/claude-code)

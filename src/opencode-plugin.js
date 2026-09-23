@@ -34,8 +34,12 @@ const surfaceMark = (label, cwd, lastMsg, sessionId) => {
 // A ponte viva mantem a trava na 49787. Sem ela a notificacao chega, mas a
 // resposta do celular nao volta.
 const pontePerto = () => new Promise((res) => {
+  // O guarda importa: sem ele, connect e timeout podem destruir o mesmo socket
+  // duas vezes, e o libuv aborta o processo na saida (UV_HANDLE_CLOSING).
+  let pronto = false;
   const s = connect({ port: 49787, host: "127.0.0.1" });
-  const fim = (v) => { try { s.destroy(); } catch {} res(v); };
+  s.unref();
+  const fim = (v) => { if (pronto) return; pronto = true; try { s.destroy(); } catch {} res(v); };
   s.setTimeout(800);
   s.once("connect", () => fim(true));
   s.once("timeout", () => fim(false));
@@ -49,7 +53,35 @@ const avisoPonte = async () => {
 [!] Ponte offline: sua resposta NAO vai chegar. Rode: node "${HOME}/.claude/hooks/telegram-bridge.mjs"`;
 };
 
-const send = async (text) => {
+// O Telegram aceita 4096 caracteres por mensagem. Quebramos em partes em vez de
+// cortar, preferindo linha em branco e depois quebra de linha.
+const NL = String.fromCharCode(10);
+const partir = (texto, limite = 3900) => {
+  if (texto.length <= limite) return [texto];
+  const partes = [];
+  let resto = texto;
+  while (resto.length > limite) {
+    const janela = resto.slice(0, limite);
+    let corte = janela.lastIndexOf(NL + NL);
+    if (corte < limite * 0.5) corte = janela.lastIndexOf(NL);
+    if (corte < limite * 0.5) corte = limite;
+    partes.push(resto.slice(0, corte));
+    resto = resto.slice(corte);
+    while (resto.startsWith(NL)) resto = resto.slice(1);
+  }
+  if (resto.trim()) partes.push(resto);
+  return partes;
+};
+
+const send = async (texto) => {
+  const partes = partir(texto);
+  for (let i = 0; i < partes.length; i++) {
+    const marca = partes.length > 1 ? `(${i + 1}/${partes.length})${NL}` : "";
+    await enviarUm(marca + partes[i]);
+  }
+};
+
+const enviarUm = async (text) => {
   const cfg = loadCfg();
   if (!cfg?.botToken || !cfg?.chatId) return;
   for (let i = 0; i < 3; i++) {
@@ -57,8 +89,10 @@ const send = async (text) => {
       const r = await fetch(`https://api.telegram.org/bot${cfg.botToken}/sendMessage`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ chat_id: cfg.chatId, text: text.slice(0, 3800), disable_web_page_preview: true }),
+        body: JSON.stringify({ chat_id: cfg.chatId, text: text.slice(0, 4096), disable_web_page_preview: true }),
       });
+      // Consumir o corpo devolve o socket ao undici, em vez de deixa-lo preso.
+      try { await r.text(); } catch {}
       log(`telegram http ${r.status}`);
       return;
     } catch (e) {

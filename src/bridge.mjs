@@ -34,10 +34,19 @@ let cfg = JSON.parse(readFileSync(CONFIG, "utf8"));
 const reloadCfg = () => { try { cfg = JSON.parse(readFileSync(CONFIG, "utf8")); } catch {} };
 
 // Wi-Fi oscila: uma falha de rede nao pode engolir um audio em silencio.
+// Com `as` ("json" | "blob" | "text") o corpo e lido DENTRO do retry e do timeout:
+// sem isso um download lento estourava fora do try e nunca era tentado de novo.
 const fetchRetry = async (url, opts = {}, tries = 4) => {
   let last;
+  let host = url; try { host = new URL(url).host; } catch {}
   for (let i = 0; i < tries; i++) {
-    try { const { timeoutMs = 8000, ...rest } = opts; return await fetch(url, { ...rest, signal: AbortSignal.timeout(timeoutMs) }); } catch (e) { last = e; log(`rede falhou (${i + 1}/${tries}): ${e.cause?.code || e.message}`); }
+    try {
+      const { timeoutMs = 8000, as, ...rest } = opts;
+      const r = await fetch(url, { ...rest, signal: AbortSignal.timeout(timeoutMs) });
+      if (!as) return r;
+      const body = as === "json" ? await r.json() : as === "blob" ? await r.blob() : await r.text();
+      return { ok: r.ok, status: r.status, body };
+    } catch (e) { last = e; log(`rede falhou (${i + 1}/${tries}) ${host}: ${e.cause?.code || e.message}`); }
     await new Promise((r) => setTimeout(r, 700 * (i + 1)));
   }
   throw last;
@@ -113,13 +122,13 @@ const spawnAgent = async (arg, cli = "claude") => {
   }
   const cwd = dir.full;
 
-  const out = await wmux(["agent", "spawn", "--cmd", cli, "--cwd", cwd, "--label", cwd.split(/[\/]/).filter(Boolean).pop() || cli]);
+  const out = await wmux(["agent", "spawn", "--cmd", `${cli}${flagsFor(cli)}`, "--cwd", cwd, "--label", cwd.split(/[\/]/).filter(Boolean).pop() || cli]);
   let ids;
   try { ids = JSON.parse(out); } catch { await reply(`Nao consegui abrir o terminal em ${cwd}.`); return; }
 
   const label = cwd.split(/[\/]/).filter(Boolean).pop() || "claude";
   const short = registerSurface(ids.surfaceId, label, ids.agentId, cli);
-  await reply(`Abrindo ${cli} em ${label} [s:${short}]. Mando a tarefa quando ele subir.`);
+  await reply(`Abrindo ${cli}${flagsFor(cli)} em ${label} [s:${short}]. Mando a tarefa quando ele subir.`);
 
   if (cli === "claude") {
     const ready = await waitReady(ids.surfaceId);
@@ -229,24 +238,35 @@ const resolveDir = (raw) => {
 
 
 // Audio do Telegram -> texto. Voce fala, o terminal recebe digitado.
+// Tres etapas com timeout proprio. Os 8 s padrao serviam para JSON pequeno; o
+// download do audio e o Whisper (~10% da duracao do audio) estouravam nele.
 const transcribe = async (fileId) => {
   if (!cfg.openaiKey) { log("sem openaiKey"); return null; }
-  const info = await (await fetchRetry(`https://api.telegram.org/bot${cfg.botToken}/getFile?file_id=${fileId}`)).json();
-  if (!info.ok) { log(`getFile falhou: ${info.description}`); return null; }
-  const audio = await fetchRetry(`https://api.telegram.org/file/bot${cfg.botToken}/${info.result.file_path}`);
-  const blob = await audio.blob();
+  let etapa = "getFile";
+  try {
+    const info = (await fetchRetry(`https://api.telegram.org/bot${cfg.botToken}/getFile?file_id=${fileId}`, { as: "json" })).body;
+    if (!info.ok) { log(`getFile falhou: ${info.description}`); return null; }
 
-  const form = new FormData();
-  form.append("file", blob, "audio.ogg");
-  form.append("model", cfg.transcribeModel || "whisper-1");
-  if (cfg.transcribeLang) form.append("language", cfg.transcribeLang);
+    etapa = "download";
+    const blob = (await fetchRetry(`https://api.telegram.org/file/bot${cfg.botToken}/${info.result.file_path}`,
+      { as: "blob", timeoutMs: 45000 }, 3)).body;
+    log(`audio baixado: ${Math.round(blob.size / 1024)} KB`);
 
-  const r = await fetchRetry("https://api.openai.com/v1/audio/transcriptions", {
-    method: "POST", headers: { authorization: `Bearer ${cfg.openaiKey}` }, body: form,
-  });
-  const j = await r.json();
-  if (!r.ok) { log(`transcricao falhou: ${JSON.stringify(j).slice(0, 200)}`); return null; }
-  return (j.text || "").trim();
+    const form = new FormData();
+    form.append("file", blob, "audio.ogg");
+    form.append("model", cfg.transcribeModel || "whisper-1");
+    if (cfg.transcribeLang) form.append("language", cfg.transcribeLang);
+
+    etapa = "whisper";
+    const r = await fetchRetry("https://api.openai.com/v1/audio/transcriptions", {
+      method: "POST", headers: { authorization: `Bearer ${cfg.openaiKey}` }, body: form, as: "json", timeoutMs: 90000,
+    }, 2);
+    if (!r.ok) { log(`transcricao falhou: ${JSON.stringify(r.body).slice(0, 200)}`); return null; }
+    return (r.body.text || "").trim();
+  } catch (e) {
+    log(`transcricao falhou na etapa ${etapa}: ${e.cause?.code || e.message}`);
+    return null;
+  }
 };
 
 
@@ -342,12 +362,23 @@ const baixarAnexo = async (fileId, nomeSugerido, destinoDir) => {
   return destino;
 };
 
+
+// Flags de subida por harness, vindas do config. Vazio = o agente sobe
+// perguntando permissao, e cada pergunta dele vira push no seu Telegram.
+//   claude:   --dangerously-skip-permissions
+//   codex:    --dangerously-bypass-approvals-and-sandbox
+//   opencode: --auto
+const flagsFor = (cli) => {
+  const f = cfg.spawnFlags && cfg.spawnFlags[cli];
+  return f ? ` ${String(f).trim()}` : "";
+};
+
 const surfaces = () => { try { return JSON.parse(readFileSync(SURFACES, "utf8")); } catch { return {}; } };
 
 
 const norm = (t) => t.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
 
-// Distancia de edicao: o Whisper troca "claude" por "Cláudio", "backend" por "back end"
+// Distancia de edicao: o Whisper troca "claude" por "Cláudio", "backend" por
 // "Randam". Comparacao exata perderia todos esses.
 const dist = (a, b) => {
   const m = a.length, n = b.length;
@@ -542,9 +573,9 @@ const handle = async (update) => {
     const agente = hit.agent || "claude";
     // So o Codex nao expoe id de sessao para o wmux; nele o melhor disponivel
     // e a ultima sessao daquela pasta.
-    const cmd = agente === "codex" ? "codex resume --last"
-      : agente === "opencode" ? (hit.sessionId ? `opencode --session ${hit.sessionId}` : "opencode --continue")
-      : (hit.sessionId ? `claude --resume ${hit.sessionId}` : "claude --continue");
+    const cmd = agente === "codex" ? `codex resume --last${flagsFor("codex")}`
+      : agente === "opencode" ? `opencode ${hit.sessionId ? `--session ${hit.sessionId}` : "--continue"}${flagsFor("opencode")}`
+      : `claude ${hit.sessionId ? `--resume ${hit.sessionId}` : "--continue"}${flagsFor("claude")}`;
 
     const out = await wmux(["agent", "spawn", "--cmd", cmd, "--cwd", hit.cwd, "--label", hit.label]);
     let ids;
